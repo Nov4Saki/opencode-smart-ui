@@ -1,13 +1,14 @@
 import type { PluginOptions } from "@opencode-ai/plugin"
-import { clamp } from "./render/util.ts"
 
-export type UiOptions = {
-  width: number
+export type Surface = "image" | "art"
+
+export type SmartUiOptions = {
+  surface: Surface
   injectPrompt: boolean
 }
 
-export function resolveOptions(raw?: PluginOptions): UiOptions {
-  const width = typeof raw?.width === "number" ? clamp(Math.round(raw.width), 40, 120) : 72
+export function resolveOptions(raw?: PluginOptions): SmartUiOptions {
+  const surface: Surface = raw?.surface === "art" ? "art" : "image"
   const injectPrompt = raw?.injectPrompt !== false
-  return { width, injectPrompt }
+  return { surface, injectPrompt }
 }

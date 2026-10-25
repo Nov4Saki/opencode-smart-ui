@@ -8,7 +8,8 @@ dist/
 # Logs
 *.log
 
-# Experimental / Standalone demos
+# Local Archives & Excluded Demos
+.archive_v0.1/
 ferrari-3d/
 
 # OS / Editor files

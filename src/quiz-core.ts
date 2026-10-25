@@ -1,160 +1,261 @@
-import { renderElements, type Element } from "./render/elements.ts"
-import { bar, formatPct, truncate, wrapText } from "./render/util.ts"
+import { normalizeLabel } from "./util.ts"
+import type { QuizQuestion, QuizRecord, QuizResult } from "./state.ts"
+import type { DockInput, DockQuestion } from "./dock.ts"
 
-export type QuizQuestionSpec = {
-  header: string
+export type QuizInputOption = string | { label: string; description?: string }
+
+export type QuizInputQuestion = {
+  header?: string
   question: string
-  options: string[]
+  options?: QuizInputOption[]
+  answer: string
   multiple?: boolean
-}
-
-export type QuizMode = "batch" | "one"
-
-export type QuizRecord = {
-  id: string
-  sessionID: string
-  title?: string
-  intro?: string
-  created: number
-  questions: QuizQuestionSpec[]
-  accepted: string[][]
-  explanations: (string | undefined)[]
-  mode: QuizMode
-  next: number
-  rows: QuizRow[]
-}
-
-export type QuizRow = {
-  question: string
-  selected: string[]
-  accepted: string[]
-  correct: boolean
   explanation?: string
 }
 
-export type QuizResult = {
-  score: number
-  total: number
-  pct: number
-  rows: QuizRow[]
-}
-
-export function parseAccepted(spec: string): string[] {
-  return spec
-    .split("|")
-    .map((part) => part.trim())
-    .filter(Boolean)
-}
-
-export function bindAccepted(accepted: string[], labels: string[]): string[] {
-  return accepted.map((value) => {
-    const lower = value.toLowerCase()
-    const exact = labels.find((label) => label.toLowerCase() === lower)
-    if (exact) return exact
-    const partial = labels.filter((label) => label.toLowerCase().includes(lower))
-    if (partial.length === 1) return partial[0]!
-    return value
-  })
-}
-
-export function gradeQuestion(question: QuizQuestionSpec, accepted: string[], raw: string[], explanation?: string): QuizRow {
-  const cleaned = raw.map((answer) => answer.trim()).filter(Boolean)
-  const skipped = cleaned.length === 0 || (cleaned.length === 1 && cleaned[0]!.toLowerCase() === "unanswered")
-  const selected = skipped ? [] : cleaned
-  const acceptedSet = new Set(accepted.map((answer) => answer.toLowerCase()))
-  const selectedSet = new Set(selected.map((answer) => answer.toLowerCase()))
-  const correct =
-    selected.length > 0 &&
-    (question.multiple
-      ? acceptedSet.size > 0 && acceptedSet.size === selectedSet.size && [...acceptedSet].every((answer) => selectedSet.has(answer))
-      : selected.every((answer) => acceptedSet.has(answer.toLowerCase())))
-  return { question: question.question, selected, accepted, correct, explanation }
-}
-
-export function gradeQuiz(record: Pick<QuizRecord, "questions" | "accepted" | "explanations">, answers: string[][]): QuizResult {
-  const rows: QuizRow[] = record.questions.map((question, index) =>
-    gradeQuestion(question, record.accepted[index] ?? [], answers[index] ?? [], record.explanations[index]),
-  )
-  const score = rows.filter((row) => row.correct).length
-  const pct = rows.length === 0 ? 0 : score / rows.length
-  return { score, total: rows.length, pct, rows }
-}
-
-export function resultFromRows(rows: QuizRow[]): QuizResult {
-  const score = rows.filter((row) => row.correct).length
-  const total = rows.length
-  return { score, total, pct: total === 0 ? 0 : score / total, rows }
-}
-
-export function quizSummary(record: Pick<QuizRecord, "id" | "next" | "questions">): string {
-  return `quiz ${record.id} q${Math.min(record.next + 1, record.questions.length)}/${record.questions.length} unanswered`
-}
-
-export function renderQuestionFeedback(record: Pick<QuizRecord, "title" | "questions">, row: QuizRow, index: number, maxWidth: number): string[] {
-  const header = `${record.title ?? "Quiz"} — question ${index + 1}/${record.questions.length}`
-  const lines: string[] = [truncate(header, maxWidth)]
-  lines.push(...wrapText(`${row.correct ? "✔" : "✖"} ${row.question}`, maxWidth))
-  if (!row.correct) {
-    const you = row.selected.length > 0 ? row.selected.join(", ") : "no answer"
-    const key = row.accepted.join(" or ") || "(no key)"
-    lines.push(...wrapText(`     you: ${you}  ·  correct: ${key}`, maxWidth))
-  }
-  if (row.explanation) lines.push(...wrapText(`     ${row.explanation}`, maxWidth))
-  return lines
-}
-
-export function renderQuizSummary(record: Pick<QuizRecord, "title">, rows: QuizRow[], maxWidth: number): string[] {
-  const result = resultFromRows(rows)
-  const missed = result.total - result.score
-  const elements: Element[] = [
-    {
-      type: "stats",
-      title: `${record.title ?? "Study session"} — summary`,
-      items: [
-        { label: "Score", value: `${result.score}/${result.total}` },
-        { label: "Accuracy", value: formatPct(result.pct, 0) },
-        { label: "Missed", value: missed },
-      ],
-    },
-    {
-      type: "checklist",
-      title: "Question review",
-      items: rows.map((row, index) => ({
-        label: `Q${index + 1} · ${row.question}`,
-        status: row.correct ? "done" : "blocked",
-      })),
-    },
-  ]
-  return renderElements(elements, { width: maxWidth })
-}
-
-function verdict(pct: number): string {
-  if (pct >= 1) return "Flawless — nothing left to teach you here."
-  if (pct >= 0.8) return "Excellent."
-  if (pct >= 0.6) return "Solid."
-  if (pct >= 0.4) return "Not bad — the ones you missed are worth a look."
-  return "Rough round — want to go over the misses together?"
-}
-
-export function renderGrading(record: Pick<QuizRecord, "title">, result: QuizResult, maxWidth: number): string[] {
-  const stars = Math.round(result.pct * 3)
-  const header = `${record.title ?? "Quiz"} — ${result.score}/${result.total} (${formatPct(result.pct, 0)})`
-  const lines: string[] = [truncate(header, maxWidth)]
-  lines.push("★".repeat(stars) + "☆".repeat(Math.max(0, 3 - stars)))
-  lines.push("[" + bar(result.pct, Math.max(10, Math.min(24, maxWidth - 14))) + "] " + formatPct(result.pct, 0))
-  result.rows.forEach((row, index) => {
-    const mark = row.correct ? "✔" : "✖"
-    const head = `${index + 1}. ${mark} ${row.question}`
-    lines.push(...wrapText(head, maxWidth))
-    if (row.correct) {
-      if (row.explanation) lines.push(...wrapText(`     ${row.explanation}`, maxWidth))
-      return
+export function optionLists(options: QuizInputOption[]): {
+  labels: string[]
+  descriptions: (string | undefined)[]
+} {
+  const labels: string[] = []
+  const descriptions: (string | undefined)[] = []
+  for (const option of options) {
+    if (typeof option === "string") {
+      labels.push(option.trim())
+      descriptions.push(undefined)
+    } else {
+      labels.push(option.label.trim())
+      descriptions.push(option.description?.trim() || undefined)
     }
-    const you = row.selected.length > 0 ? row.selected.join(", ") : "no answer"
-    const key = row.accepted.join(" or ") || "(no key)"
-    lines.push(...wrapText(`     you: ${you}  ·  correct: ${key}`, maxWidth))
-    if (row.explanation) lines.push(...wrapText(`     ${row.explanation}`, maxWidth))
+  }
+  return { labels, descriptions }
+}
+
+function findLabel(labels: string[], needle: string): string | undefined {
+  const norm = normalizeLabel(needle)
+  return labels.find((label) => normalizeLabel(label) === norm)
+}
+
+export function normalizeQuizQuestion(input: QuizInputQuestion, index: number): QuizQuestion {
+  const where = `question ${index + 1}`
+  const question = input.question?.trim()
+  if (!question) throw new Error(`smartui_quiz: ${where} needs a non-empty question text`)
+  const { labels, descriptions } = optionLists(input.options ?? [])
+  const answer = input.answer?.trim()
+  if (!answer) throw new Error(`smartui_quiz: ${where} needs a non-empty answer (correct option label)`)
+  const multiple = input.multiple === true
+
+  if (labels.length === 0) {
+    if (multiple) throw new Error(`smartui_quiz: ${where} is fill-in (no options) — multiple is not allowed`)
+    const accepted = answer
+      .split("|")
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((part) => [part])
+    if (accepted.length === 0) throw new Error(`smartui_quiz: ${where} needs at least one accepted answer`)
+    return {
+      header: input.header?.trim() || undefined,
+      question,
+      options: [],
+      descriptions: [],
+      multiple: false,
+      accepted,
+      explanation: input.explanation?.trim() || undefined,
+    }
+  }
+
+  if (labels.length < 2) throw new Error(`smartui_quiz: ${where} needs at least 2 options (or omit options for a fill-in question)`)
+  const seen = new Set<string>()
+  for (const label of labels) {
+    if (!label) throw new Error(`smartui_quiz: ${where} has an empty option label`)
+    const norm = normalizeLabel(label)
+    if (seen.has(norm)) throw new Error(`smartui_quiz: ${where} has duplicate option label "${label}"`)
+    seen.add(norm)
+  }
+  const alternatives = multiple ? answer.split(",") : answer.split("|")
+  const accepted: string[][] = []
+  if (multiple) {
+    const set: string[] = []
+    for (const part of alternatives) {
+      const trimmed = part.trim()
+      if (!trimmed) throw new Error(`smartui_quiz: ${where} answer has an empty entry`)
+      const bound = findLabel(labels, trimmed)
+      if (!bound) throw new Error(`smartui_quiz: ${where} answer "${trimmed}" does not match any option label`)
+      set.push(bound)
+    }
+    if (set.length < 1) throw new Error(`smartui_quiz: ${where} multiple-choice answer needs at least one label`)
+    accepted.push(set)
+  } else {
+    for (const part of alternatives) {
+      const trimmed = part.trim()
+      if (!trimmed) continue
+      const bound = findLabel(labels, trimmed)
+      if (!bound) throw new Error(`smartui_quiz: ${where} answer "${trimmed}" does not match any option label`)
+      accepted.push([bound])
+    }
+    if (accepted.length === 0) throw new Error(`smartui_quiz: ${where} needs at least one accepted answer`)
+  }
+  return {
+    header: input.header?.trim() || undefined,
+    question,
+    options: labels,
+    descriptions,
+    multiple,
+    accepted,
+    explanation: input.explanation?.trim() || undefined,
+  }
+}
+
+export function canonicalVote(question: QuizQuestion, vote: string | number): string {
+  const raw = typeof vote === "number" ? String(vote) : vote
+  const trimmed = raw.trim()
+  if (/^\d+$/.test(trimmed)) {
+    const index = Number(trimmed) - 1
+    const byIndex = question.options[index]
+    if (byIndex && normalizeLabel(byIndex) !== trimmed) return byIndex
+  }
+  const bound = findLabel(question.options, trimmed)
+  return bound ?? trimmed
+}
+
+export function gradeQuestion(question: QuizQuestion, votes: (string | number)[]): QuizResult {
+  const given = votes.map((vote) => canonicalVote(question, vote))
+  const givenSet = new Set(given.map(normalizeLabel))
+  const correct = question.accepted.some((acceptedSet) => {
+    const normalized = acceptedSet.map(normalizeLabel)
+    return normalized.length === givenSet.size && normalized.every((label) => givenSet.has(label))
   })
-  lines.push(verdict(result.pct))
-  return lines
+  return { correct, given }
+}
+
+export function normalizeVotes(answers: unknown): (string | number)[] {
+  if (!Array.isArray(answers)) {
+    if (typeof answers === "string" || typeof answers === "number") return [answers]
+    return []
+  }
+  const flat = answers.flat(1) as unknown[]
+  return flat.filter((entry): entry is string | number => typeof entry === "string" || typeof entry === "number")
+}
+
+export function scoreQuiz(quiz: QuizRecord): { correct: number; answered: number; total: number } {
+  const answered = quiz.results.filter((result) => result !== null).length
+  const correct = quiz.results.filter((result) => result?.correct === true).length
+  return { correct, answered, total: quiz.questions.length }
+}
+
+function progressRow(quiz: QuizRecord): string {
+  return quiz.results
+    .map((result, i) => {
+      if (!result) return i === quiz.next ? "▶" : "○"
+      return result.correct ? "✓" : "✗"
+    })
+    .join(" ")
+}
+
+export function serveCardMarkdown(quiz: QuizRecord, index: number): string {
+  const question = quiz.questions[index]!
+  const lines: string[] = []
+  if (quiz.title) lines.push(`**${quiz.title}** — question ${index + 1} of ${quiz.questions.length}`)
+  else lines.push(`**Quiz** — question ${index + 1} of ${quiz.questions.length}`)
+  if (quiz.intro) lines.push("", quiz.intro)
+  lines.push("", `**${question.header ? `${question.header}: ` : ""}${question.question}**`, "")
+  if (question.options.length === 0) {
+    lines.push("_Type your answer_")
+  } else {
+    question.options.forEach((label, i) => {
+      const description = question.descriptions[i]
+      lines.push(`${i + 1}. ${label}${description ? ` — ${description}` : ""}`)
+    })
+  }
+  if (question.multiple) lines.push("", "_select the complete set_")
+  if (quiz.mode === "one") lines.push("", progressRow(quiz))
+  return lines.join("\n")
+}
+
+export function resultCardMarkdown(quiz: QuizRecord, index: number): string {
+  const question = quiz.questions[index]!
+  const result = quiz.results[index]!
+  const lines: string[] = []
+  lines.push(
+    `**${quiz.title ?? "Quiz"}** — question ${index + 1} of ${quiz.questions.length} — ${result.correct ? "✓ correct" : "✗ wrong"}`,
+  )
+  lines.push("", `You answered: ${result.given.join(", ") || "(nothing)"}`)
+  if (!result.correct) lines.push(`Correct: ${question.accepted[0]!.join(", ")}`)
+  if (question.explanation) lines.push("", `> ${question.explanation}`)
+  lines.push("", progressRow(quiz))
+  return lines.join("\n")
+}
+
+export function summaryCardMarkdown(quiz: QuizRecord): string {
+  const { correct, total } = scoreQuiz(quiz)
+  const pct = total > 0 ? Math.round((correct / total) * 100) : 0
+  const lines: string[] = [
+    `**${quiz.title ?? "Quiz"} — summary** · ${correct}/${total} correct (${pct}%)`,
+    "",
+    "| # | Question | Your answer | Result |",
+    "|---|---|---|---|",
+  ]
+  quiz.questions.forEach((question, i) => {
+    const result = quiz.results[i]
+    const verdict = !result ? "—" : result.correct ? "✓" : "✗"
+    const given = result?.given.join(", ") ?? "—"
+    const text = question.question.replace(/\|/g, "\\|").replace(/\r?\n/g, " ").slice(0, 90)
+    lines.push(`| ${i + 1} | ${text} | ${given.replace(/\|/g, "\\|")} | ${verdict} |`)
+  })
+  const wrong = quiz.questions
+    .map((question, i) => ({ question, result: quiz.results[i] }))
+    .filter((entry) => entry.result && !entry.result.correct)
+  if (wrong.length > 0) {
+    lines.push("")
+    for (const entry of wrong) {
+      lines.push(
+        `- **${entry.question.question.slice(0, 80)}** — correct: ${entry.question.accepted[0]!.join(", ")}${entry.question.explanation ? ` — ${entry.question.explanation}` : ""}`,
+      )
+    }
+  }
+  return lines.join("\n")
+}
+
+export function batchServeCardMarkdown(quiz: QuizRecord): string {
+  const lines: string[] = [`**${quiz.title ?? "Questionnaire"}** — ${quiz.questions.length} questions`]
+  if (quiz.intro) lines.push("", quiz.intro)
+  lines.push("")
+  quiz.questions.forEach((question, i) => {
+    lines.push(`${i + 1}. **${question.header ? `${question.header}: ` : ""}${question.question}**`)
+    if (question.options.length === 0) {
+      lines.push("   _Type your answer_")
+    } else {
+      for (const [j, label] of question.options.entries()) {
+        const description = question.descriptions[j]
+        lines.push(`   ${j + 1}. \`${label}\`${description ? ` — ${description}` : ""}`)
+      }
+    }
+    if (question.multiple) lines.push("   _select all that apply_")
+    if (i < quiz.questions.length - 1) lines.push("")
+  })
+  return lines.join("\n")
+}
+
+export function serveDockInput(quiz: QuizRecord, index: number): DockInput {
+  const question = quiz.questions[index]!
+  const dock: DockQuestion = {
+    header: question.header ?? `Question ${index + 1}/${quiz.questions.length}`,
+    question: question.question,
+    options: question.options.map((label, i) => ({ label, description: question.descriptions[i] ?? "" })),
+    multiple: question.multiple,
+    custom: question.options.length === 0,
+  }
+  return { questions: [dock] }
+}
+
+export function serveAllDockInput(quiz: QuizRecord): DockInput {
+  return {
+    questions: quiz.questions.map((question, i) => ({
+      header: question.header ?? `Question ${i + 1}/${quiz.questions.length}`,
+      question: question.question,
+      options: question.options.map((label, j) => ({ label, description: question.descriptions[j] ?? "" })),
+      multiple: question.multiple,
+      custom: question.options.length === 0,
+    })),
+  }
 }
