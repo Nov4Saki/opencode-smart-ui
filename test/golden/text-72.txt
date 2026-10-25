@@ -1,0 +1,38 @@
+### diff
+Working tree changes
+── src/tools/render.ts ─────────────────────────────────────────────────
+index 91c3e02..f4b1107 100644
+@@ -18,3 +18,6 @@ const pointSchema = S.object({
+18 18     label: S.string().optional(),
+19    -   value: S.number(),
+   19 +   value: S.number(),
+   20 +   type: S.enum(["abs", "delta", "total"]).optional(),
+20 21   })
+        ⊘ no newline at end of file
+
+### kv
+Run summary
+Model         ...................................... deepseek-v4.1-flash
+Input tokens  ................................................... 48,120
+Output tokens .................................................... 3,912
+Cost          .................................................... $0.42
+
+### badge
+CI checks
+✔ typecheck  ✔ tests·42/42  ⚠ lint·4 warnings
+
+### stepper
+Deploy pipeline
+✔ build ─ ✔ test ─ ● migrate ─ ○ deploy
+
+### empty
+∅ No failing tests in the latest run — all 42 passed
+
+### quote
+│ Design decisions age faster than code.
+│ — refactor retro
+
+### footnotes
+Notes
+¹ First note.
+² Second note.
